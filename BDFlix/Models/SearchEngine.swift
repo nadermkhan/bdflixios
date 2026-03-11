@@ -63,11 +63,12 @@ class SearchEngine: ObservableObject {
                     allResults.append(contentsOf: serverResults)
                 }
                 
+                let finalResults = allResults
                 await MainActor.run {
-                    self.results = allResults
+                    self.results = finalResults
                     self.applySort()
                     self.isSearching = false
-                    self.statusMessage = "\(allResults.count) files found"
+                    self.statusMessage = "\(finalResults.count) files found"
                 }
             }
         }

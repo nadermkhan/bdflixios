@@ -6,7 +6,7 @@ class DownloadManager: NSObject, ObservableObject {
     
     private var nextId = 1
     private var activeSessions: [Int: URLSession] = [:]
-    private var activeObservations: [Int: NSKeyValueObservation] = []
+    private var activeObservations: [Int: NSKeyValueObservation] = [:]
     private var updateTimer: Timer?
     
     override init() {
@@ -129,7 +129,7 @@ class DownloadManager: NSObject, ObservableObject {
     }
     
     private func observeProgress(_ downloadTask: URLSessionDownloadTask, for task: DownloadTaskItem) {
-        let observation = downloadTask.progress.observe(\.fractionCompleted) { [weak self, weak task] progress, _ in
+        let observation = downloadTask.progress.observe(\.fractionCompleted) { [weak task] progress, _ in
             guard let task = task else { return }
             let downloaded = Int64(progress.fractionCompleted * Double(max(task.fileSize, progress.totalUnitCount)))
             DispatchQueue.main.async {
