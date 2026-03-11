@@ -26,8 +26,7 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         cfg.timeoutIntervalForRequest = 30
         cfg.timeoutIntervalForResource = 86400
         
-        // Cannot use self directly as delegate because it requires init to finish up
-        super.init() // This is redundant with line 16, but shown to outline intent
+        // URLSession configuration and init
         
         self.session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
         
