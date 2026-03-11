@@ -1,0 +1,65 @@
+# .github/workflows/build.yml
+name: Build Unsigned IPA for LiveContainer
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Select Xcode
+      run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+      
+    - name: Setup Project
+      run: |
+        chmod +x generate_project.sh
+        ./generate_project.sh
+        
+    - name: Build
+      run: |
+        xcodebuild -project BDFlix.xcodeproj \
+          -scheme BDFlix \
+          -configuration Release \
+          -sdk iphoneos \
+          -destination 'generic/platform=iOS' \
+          -archivePath build/BDFlix.xcarchive \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          DEVELOPMENT_TEAM="" \
+          PROVISIONING_PROFILE="" \
+          archive
+          
+    - name: Create IPA
+      run: |
+        mkdir -p build/Payload
+        cp -r build/BDFlix.xcarchive/Products/Applications/BDFlix.app build/Payload/
+        cd build
+        zip -r BDFlix.ipa Payload
+        
+    - name: Upload IPA
+      uses: actions/upload-artifact@v4
+      with:
+        name: BDFlix-unsigned
+        path: build/BDFlix.ipa
+        
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ github.run_number }}
+        name: BDFlix Build ${{ github.run_number }}
+        files: build/BDFlix.ipa
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
