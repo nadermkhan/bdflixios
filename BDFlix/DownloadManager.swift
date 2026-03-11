@@ -131,12 +131,14 @@ class DLDelegate: NSObject, URLSessionDownloadDelegate {
             if fm.fileExists(atPath: item.savePath.path) { try fm.removeItem(at: item.savePath) }
             try fm.moveItem(at: loc, to: item.savePath)
             DispatchQueue.main.async {
+                self.mgr?.objectWillChange.send()
                 item.state = .done; item.speed = 0
                 if item.fileSize > 0 { item.downloaded = item.fileSize }
                 self.notify(title: "Download Complete", body: item.fileName)
             }
         } catch {
             DispatchQueue.main.async {
+                self.mgr?.objectWillChange.send()
                 item.state = .error; item.errorMsg = error.localizedDescription
                 self.notify(title: "Download Failed", body: error.localizedDescription)
             }
@@ -166,6 +168,7 @@ class DLDelegate: NSObject, URLSessionDownloadDelegate {
         guard let item = item, let e = error else { return }
         let ns = e as NSError
         DispatchQueue.main.async {
+            self.mgr?.objectWillChange.send()
             if ns.code == NSURLErrorCancelled {
                 if !item.isPaused && !item.isCancelled { item.state = .cancelled }
             } else {

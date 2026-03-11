@@ -3,7 +3,7 @@ import SwiftUI
 
 struct DownloadsView: View {
     @EnvironmentObject var mgr: DownloadManager
-    @State private var showFilesReminder = false
+    @State private var showDirPicker = false
 
     var body: some View {
         NavigationStack {
@@ -67,7 +67,7 @@ struct DownloadsView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
-                        Button { showFilesReminder = true } label: {
+                        Button { showDirPicker = true } label: {
                             Label("Change Save Location", systemImage: "folder")
                         }
                         Section {
@@ -78,15 +78,10 @@ struct DownloadsView: View {
                     }
                 }
             }
-            .alert("Manage in Files App", isPresented: $showFilesReminder) {
-                Button("Open Files App", role: .none) {
-                    if let url = URL(string: "shareddocuments://"), UIApplication.shared.canOpenURL(url) {
-                        UIApplication.shared.open(url)
-                    }
+            .sheet(isPresented: $showDirPicker) {
+                FolderPicker { url in
+                    if let url = url { mgr.changeSaveDir(to: url) }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("To avoid LiveContainer sandbox limitations, please use the native iOS Files app to move or manage downloaded files.")
             }
         }
     }
