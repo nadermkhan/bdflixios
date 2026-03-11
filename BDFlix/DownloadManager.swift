@@ -46,12 +46,14 @@ class DownloadManager: NSObject, ObservableObject {
     }
 
     func pause(_ item: DLItem) {
+        objectWillChange.send()
         item.isPaused = true
         item.task?.cancel(byProducingResumeData: { item.resumeData = $0 })
         item.state = .paused; item.speed = 0
     }
 
     func resume(_ item: DLItem) {
+        objectWillChange.send()
         item.isPaused = false; item.state = .downloading
         if let rd = item.resumeData, let s = sessions[item.id] {
             let t = s.downloadTask(withResumeData: rd)
@@ -60,6 +62,7 @@ class DownloadManager: NSObject, ObservableObject {
     }
 
     func cancel(_ item: DLItem) {
+        objectWillChange.send()
         item.isCancelled = true; item.task?.cancel()
         sessions[item.id]?.invalidateAndCancel()
         sessions.removeValue(forKey: item.id)
