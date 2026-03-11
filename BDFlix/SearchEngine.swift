@@ -97,34 +97,41 @@ class SearchEngine: ObservableObject {
         for t in tokens where !t.neg { pat = t.text; break }
         if pat.isEmpty { pat = term.trimmingCharacters(in: .whitespaces) }
 
-        guard let url = URL(string: "http://\(srv.host):\(srv.port)\(srv.path)") else { return [] }
-        
-        let safePat = pat.replacingOccurrences(of: "\"", with: "\\\"")
-        let searchJson = "[{\"href\":\"/\(srv.name)/\",\"pattern\":\"\(safePat)\",\"ignorecase\":true}]"
-        
-        var comps = URLComponents()
-        comps.queryItems = [
-            URLQueryItem(name: "action", value: "get"),
-            URLQueryItem(name: "search", value: searchJson)
+        let body: [String: Any] = [
+            "action": "get",
+            "search": [
+                "href": "/\(srv.name)/",
+                "pattern": pat,
+                "ignorecase": true
+            ]
         ]
         
-        guard let bodyString = comps.percentEncodedQuery,
-              let bodyData = bodyString.data(using: .utf8) else { return [] }
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
+              let url = URL(string: "http://\(srv.host):\(srv.port)\(srv.path)") else { return [] }
 
-        var req = URLRequest(url: url, timeoutInterval: 25)
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.httpBody = bodyData
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.httpBody = jsonData
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 25
 
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 25
+            config.timeoutIntervalForResource = 60
+            let session = URLSession(configuration: config)
+
+            let (data, resp) = try await session.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return [] }
             return parse(data, srv, tokens)
         } catch { return [] }
     }
 
     private nonisolated func parse(_ data: Data, _ srv: ServerInfo, _ tokens: [Token]) -> [FileResult] {
-        guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            guard let str = String(data: data, encoding: .utf8) else { return [] }
+            return parseJsonString(str, srv, tokens)
+        }
         return arr.compactMap { item -> FileResult? in
             guard let href = item["href"] as? String else { return nil }
             let dn = StrUtil.urlDec(StrUtil.name(href))
@@ -141,5 +148,79 @@ class SearchEngine: ObservableObject {
                 folder: StrUtil.urlDec(StrUtil.folder(href))
             )
         }
+    }
+
+    private nonisolated func parseJsonString(_ jsonString: String, _ srv: ServerInfo, _ tokens: [Token]) -> [FileResult] {
+        var results: [FileResult] = []
+        var searchStart = jsonString.startIndex
+        
+        while let openBrace = jsonString.range(of: "{", range: searchStart..<jsonString.endIndex) {
+            guard let closeBrace = jsonString.range(of: "}", range: openBrace.upperBound..<jsonString.endIndex) else { break }
+            let objectStr = String(jsonString[openBrace.lowerBound...closeBrace.lowerBound])
+            
+            if let href = extractJsonString(objectStr, key: "href") {
+                let dn = StrUtil.urlDec(StrUtil.name(href))
+                if FileResult.allowed(dn) && matches(dn, tokens) {
+                    let sizeStr = extractJsonNumber(objectStr, key: "size") ?? extractJsonString(objectStr, key: "size") ?? ""
+                    results.append(FileResult(
+                        name: dn,
+                        href: href,
+                        fullUrl: "http://\(srv.host)\(href)",
+                        sizeBytes: Fmt.parseSize(sizeStr),
+                        server: srv.name,
+                        folder: StrUtil.urlDec(StrUtil.folder(href))
+                    ))
+                }
+            }
+            searchStart = closeBrace.upperBound
+        }
+        return results
+    }
+
+    private nonisolated func extractJsonString(_ json: String, key: String) -> String? {
+        let searchKey = "\"\(key)\""
+        guard let keyRange = json.range(of: searchKey) else { return nil }
+        var idx = keyRange.upperBound
+        while idx < json.endIndex && (json[idx] == " " || json[idx] == ":" || json[idx] == "\t" || json[idx] == "\n") {
+            idx = json.index(after: idx)
+        }
+        guard idx < json.endIndex && json[idx] == "\"" else { return nil }
+        idx = json.index(after: idx)
+        
+        var result = ""
+        while idx < json.endIndex && json[idx] != "\"" {
+            if json[idx] == "\\" {
+                idx = json.index(after: idx)
+                guard idx < json.endIndex else { break }
+                switch json[idx] {
+                case "\"": result += "\""
+                case "\\": result += "\\"
+                case "/": result += "/"
+                case "n": result += "\n"
+                default: result.append(json[idx])
+                }
+            } else {
+                result.append(json[idx])
+            }
+            idx = json.index(after: idx)
+        }
+        return result
+    }
+
+    private nonisolated func extractJsonNumber(_ json: String, key: String) -> String? {
+        let searchKey = "\"\(key)\""
+        guard let keyRange = json.range(of: searchKey) else { return nil }
+        var idx = keyRange.upperBound
+        while idx < json.endIndex && (json[idx] == " " || json[idx] == ":" || json[idx] == "\t") {
+            idx = json.index(after: idx)
+        }
+        guard idx < json.endIndex else { return nil }
+        
+        var result = ""
+        while idx < json.endIndex && (json[idx].isNumber || json[idx] == ".") {
+            result.append(json[idx])
+            idx = json.index(after: idx)
+        }
+        return result.isEmpty ? nil : result
     }
 }
