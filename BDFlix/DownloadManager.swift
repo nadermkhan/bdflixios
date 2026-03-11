@@ -15,11 +15,12 @@ class DownloadManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        if let bm = UserDefaults.standard.data(forKey: "savedDownloadDir"),
-           var staled = false as ObjCBool?,
-           let url = try? URL(resolvingBookmarkData: bm, options: .withoutUI, relativeTo: nil, bookmarkDataIsStale: &staled) {
-            _ = url.startAccessingSecurityScopedResource()
-            self.saveDir = url
+        if let bm = UserDefaults.standard.data(forKey: "savedDownloadDir") {
+            var staled = false
+            if let url = try? URL(resolvingBookmarkData: bm, options: .withoutUI, relativeTo: nil, bookmarkDataIsStale: &staled) {
+                _ = url.startAccessingSecurityScopedResource()
+                self.saveDir = url
+            }
         }
         
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
