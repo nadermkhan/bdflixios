@@ -4,13 +4,12 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-class DownloadManager: NSObject, ObservableObject {
+class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var items: [DLItem] = []
     @Published var saveDir: URL = DownloadManager.defaultDir()
 
     private var nextId = 1
-    private var sessions: [Int: URLSession] = [:]
-    private var delegates: [Int: DLDelegate] = [:]
+    private var session: URLSession!
     private var timer: Timer?
 
     override init() {
@@ -23,9 +22,59 @@ class DownloadManager: NSObject, ObservableObject {
             }
         }
         
+        let cfg = URLSessionConfiguration.background(withIdentifier: "BDFlixBackground")
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 86400
+        
+        // Cannot use self directly as delegate because it requires init to finish up
+        super.init() // This is redundant with line 16, but shown to outline intent
+        
+        self.session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+        
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in self.tick() }
+        }
+        
+        Task { await restoreExistingTasks() }
+    }
+    
+    // Quick struct to serialize DLItem essential info into taskDescription
+    private struct DLTaskMeta: Codable {
+        let id: Int
+        let url: String
+        let fileName: String
+        let savePath: URL
+    }
+    
+    private func restoreExistingTasks() async {
+        let tasks = await session.allTasks
+        for task in tasks {
+            guard let dlTask = task as? URLSessionDownloadTask,
+                  let desc = task.taskDescription,
+                  let data = desc.data(using: .utf8),
+                  let meta = try? JSONDecoder().decode(DLTaskMeta.self, from: data) else { continue }
+            
+            let item = DLItem(id: meta.id, url: meta.url, fileName: meta.fileName, savePath: meta.savePath)
+            item.task = dlTask
+            if id >= nextId { nextId = id + 1 }
+            
+            switch task.state {
+            case .running: item.state = .downloading
+            case .suspended: item.state = .paused
+            case .canceling: item.state = .cancelled
+            case .completed:
+                if let err = task.error {
+                    item.state = .error
+                    item.errorMsg = err.localizedDescription
+                } else {
+                    item.state = .done
+                    item.downloaded = item.fileSize > 0 ? item.fileSize : task.countOfBytesReceived
+                }
+            @unknown default: item.state = .queued
+            }
+            
+            items.append(item)
         }
     }
 
@@ -55,18 +104,17 @@ class DownloadManager: NSObject, ObservableObject {
     func resume(_ item: DLItem) {
         objectWillChange.send()
         item.isPaused = false; item.state = .downloading
-        if let rd = item.resumeData, let s = sessions[item.id] {
-            let t = s.downloadTask(withResumeData: rd)
-            item.task = t; t.resume()
+        if let rd = item.resumeData {
+            let t = session.downloadTask(withResumeData: rd)
+            item.task = t;
+            setTaskMeta(for: t, from: item)
+            t.resume()
         } else { start(item) }
     }
 
     func cancel(_ item: DLItem) {
         objectWillChange.send()
         item.isCancelled = true; item.task?.cancel()
-        sessions[item.id]?.invalidateAndCancel()
-        sessions.removeValue(forKey: item.id)
-        delegates.removeValue(forKey: item.id)
         item.state = .cancelled; item.speed = 0
     }
 
@@ -82,18 +130,19 @@ class DownloadManager: NSObject, ObservableObject {
 
     // MARK: Private
 
+    private func setTaskMeta(for task: URLSessionTask, from item: DLItem) {
+        let meta = DLTaskMeta(id: item.id, url: item.url, fileName: item.fileName, savePath: item.savePath)
+        if let data = try? JSONEncoder().encode(meta) {
+            task.taskDescription = String(data: data, encoding: .utf8)
+        }
+    }
+
     private func start(_ item: DLItem) {
         guard let url = URL(string: item.url) else {
             item.state = .error; item.errorMsg = "Bad URL"; return
         }
-        let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 30
-        cfg.timeoutIntervalForResource = 86400
-        let del = DLDelegate(item: item, mgr: self)
-        delegates[item.id] = del
-        let s = URLSession(configuration: cfg, delegate: del, delegateQueue: nil)
-        sessions[item.id] = s
-        let t = s.downloadTask(with: url)
+        let t = session.downloadTask(with: url)
+        setTaskMeta(for: t, from: item)
         item.task = t; item.lastTime = Date(); item.lastBytes = 0
         item.state = .downloading
         t.resume()
@@ -114,41 +163,37 @@ class DownloadManager: NSObject, ObservableObject {
             }
         }
     }
-}
 
-// MARK: - Delegate
-
-class DLDelegate: NSObject, URLSessionDownloadDelegate {
-    weak var item: DLItem?
-    weak var mgr: DownloadManager?
-
-    init(item: DLItem, mgr: DownloadManager) {
-        self.item = item; self.mgr = mgr
+    // MARK: - URLSessionDelegate
+    
+    private func itemForTask(_ task: URLSessionTask) -> DLItem? {
+        guard let desc = task.taskDescription,
+              let data = desc.data(using: .utf8),
+              let meta = try? JSONDecoder().decode(DLTaskMeta.self, from: data) else { return nil }
+        return items.first { $0.id == meta.id }
     }
 
-    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask,
+    nonisolated func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo loc: URL) {
-        guard let item = item else { return }
-        do {
-            let fm = FileManager.default
-            if fm.fileExists(atPath: item.savePath.path) { try fm.removeItem(at: item.savePath) }
-            try fm.moveItem(at: loc, to: item.savePath)
-            DispatchQueue.main.async {
-                self.mgr?.objectWillChange.send()
+        Task { @MainActor in
+            guard let item = self.itemForTask(downloadTask) else { return }
+            do {
+                let fm = FileManager.default
+                if fm.fileExists(atPath: item.savePath.path) { try fm.removeItem(at: item.savePath) }
+                try fm.moveItem(at: loc, to: item.savePath)
+                self.objectWillChange.send()
                 item.state = .done; item.speed = 0
                 if item.fileSize > 0 { item.downloaded = item.fileSize }
                 self.notify(title: "Download Complete", body: item.fileName)
-            }
-        } catch {
-            DispatchQueue.main.async {
-                self.mgr?.objectWillChange.send()
+            } catch {
+                self.objectWillChange.send()
                 item.state = .error; item.errorMsg = error.localizedDescription
                 self.notify(title: "Download Failed", body: error.localizedDescription)
             }
         }
     }
 
-    private func notify(title: String, body: String) {
+    private nonisolated func notify(title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -157,26 +202,36 @@ class DLDelegate: NSObject, URLSessionDownloadDelegate {
         UNUserNotificationCenter.current().add(req)
     }
 
-    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask,
+    nonisolated func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bw: Int64, totalBytesWritten tw: Int64,
                     totalBytesExpectedToWrite te: Int64) {
-        guard let item = item else { return }
-        DispatchQueue.main.async {
+        Task { @MainActor in
+            guard let item = self.itemForTask(downloadTask) else { return }
             item.downloaded = tw
             if te > 0 { item.fileSize = te }
         }
     }
 
-    func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let item = item, let e = error else { return }
-        let ns = e as NSError
-        DispatchQueue.main.async {
-            self.mgr?.objectWillChange.send()
+    nonisolated func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        Task { @MainActor in
+            guard let item = self.itemForTask(task), let e = error else { return }
+            let ns = e as NSError
+            self.objectWillChange.send()
             if ns.code == NSURLErrorCancelled {
                 if !item.isPaused && !item.isCancelled { item.state = .cancelled }
             } else {
                 item.state = .error; item.errorMsg = e.localizedDescription; item.speed = 0
                 self.notify(title: "Download Failed", body: "\(item.fileName)\n\(e.localizedDescription)")
+            }
+        }
+    }
+
+    nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        Task { @MainActor in
+            if let ad = UIApplication.shared.delegate as? AppDelegate,
+               let completion = ad.bgSessionCompletionHandler {
+                ad.bgSessionCompletionHandler = nil
+                completion()
             }
         }
     }
