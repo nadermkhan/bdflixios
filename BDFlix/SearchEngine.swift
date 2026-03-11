@@ -54,23 +54,28 @@ class SearchEngine: ObservableObject {
 
     private nonisolated func tokenize(_ q: String) -> [Token] {
         var tokens: [Token] = []
-        var i = q.startIndex
-        while i < q.endIndex {
-            while i < q.endIndex, q[i] == " " { i = q.index(after: i) }
-            guard i < q.endIndex else { break }
+        let chars = Array(q)
+        var i = 0
+        while i < chars.count {
+            while i < chars.count && chars[i] == " " { i += 1 }
+            guard i < chars.count else { break }
             var neg = false
-            if q[i] == "-" { neg = true; i = q.index(after: i) }
-            guard i < q.endIndex else { break }
+            if chars[i] == "-" {
+                neg = true
+                i += 1
+            }
+            guard i < chars.count else { break }
             var txt = ""
-            if q[i] == "\"" {
-                i = q.index(after: i); let s = i
-                while i < q.endIndex, q[i] != "\"" { i = q.index(after: i) }
-                txt = String(q[s..<i]).lowercased()
-                if i < q.endIndex { i = q.index(after: i) }
+            if chars[i] == "\"" {
+                i += 1
+                let s = i
+                while i < chars.count && chars[i] != "\"" { i += 1 }
+                txt = String(chars[s..<i]).lowercased()
+                if i < chars.count { i += 1 }
             } else {
                 let s = i
-                while i < q.endIndex, q[i] != " " { i = q.index(after: i) }
-                txt = String(q[s..<i]).lowercased()
+                while i < chars.count && chars[i] != " " { i += 1 }
+                txt = String(chars[s..<i]).lowercased()
             }
             if !txt.isEmpty { tokens.append(Token(text: txt, neg: neg)) }
         }
@@ -90,18 +95,26 @@ class SearchEngine: ObservableObject {
     private nonisolated func query(_ srv: ServerInfo, _ term: String, _ tokens: [Token]) async -> [FileResult] {
         var pat = term
         for t in tokens where !t.neg { pat = t.text; break }
+        if pat.isEmpty { pat = term.trimmingCharacters(in: .whitespaces) }
 
-        let body: [String: Any] = [
-            "action": "get",
-            "search": ["href": "/\(srv.name)/", "pattern": pat, "ignorecase": true]
+        guard let url = URL(string: "http://\(srv.host):\(srv.port)\(srv.path)") else { return [] }
+        
+        let safePat = pat.replacingOccurrences(of: "\"", with: "\\\"")
+        let searchJson = "[{\"href\":\"/\(srv.name)/\",\"pattern\":\"\(safePat)\",\"ignorecase\":true}]"
+        
+        var comps = URLComponents()
+        comps.queryItems = [
+            URLQueryItem(name: "action", value: "get"),
+            URLQueryItem(name: "search", value: searchJson)
         ]
-        guard let json = try? JSONSerialization.data(withJSONObject: body),
-              let url = URL(string: "http://\(srv.host):\(srv.port)\(srv.path)") else { return [] }
+        
+        guard let bodyString = comps.percentEncodedQuery,
+              let bodyData = bodyString.data(using: .utf8) else { return [] }
 
         var req = URLRequest(url: url, timeoutInterval: 25)
         req.httpMethod = "POST"
-        req.httpBody = json
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = bodyData
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
