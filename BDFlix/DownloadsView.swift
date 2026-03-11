@@ -50,7 +50,8 @@ struct DownloadsView: View {
                                         Button(role: .destructive) { mgr.cancel(item) } label: { Label("Cancel", systemImage: "xmark.circle") }
                                     }
                                     if item.state == .done {
-                                        Button { share(item) } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                                        Button { share(item) } label: { Label("Share File", systemImage: "square.and.arrow.up") }
+                                        Button { openFolder(item.savePath.deletingLastPathComponent()) } label: { Label("Open Folder", systemImage: "folder") }
                                     }
                                     if item.state == .done || item.state == .error || item.state == .cancelled {
                                         Button(role: .destructive) { mgr.remove(item) } label: { Label("Remove", systemImage: "trash") }
@@ -95,6 +96,24 @@ struct DownloadsView: View {
                 pop.sourceRect = CGRect(x: vc.view.bounds.midX, y: vc.view.bounds.midY, width: 0, height: 0)
             }
             vc.present(av, animated: true)
+        }
+    }
+
+    private func openFolder(_ url: URL) {
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        comps?.scheme = "shareddocuments"
+        if let sharedUrl = comps?.url, UIApplication.shared.canOpenURL(sharedUrl) {
+            UIApplication.shared.open(sharedUrl)
+        } else {
+            let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            if let ws = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let vc = ws.windows.first?.rootViewController {
+                if let pop = av.popoverPresentationController {
+                    pop.sourceView = vc.view
+                    pop.sourceRect = CGRect(x: vc.view.bounds.midX, y: vc.view.bounds.midY, width: 0, height: 0)
+                }
+                vc.present(av, animated: true)
+            }
         }
     }
 }

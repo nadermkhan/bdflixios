@@ -1,6 +1,7 @@
 // BDFlix/DownloadManager.swift
 import Foundation
 import SwiftUI
+import UserNotifications
 
 @MainActor
 class DownloadManager: NSObject, ObservableObject {
@@ -14,6 +15,13 @@ class DownloadManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        if let bm = UserDefaults.standard.data(forKey: "savedDownloadDir"),
+           var staled = false as ObjCBool?,
+           let url = try? URL(resolvingBookmarkData: bm, options: .withoutUI, relativeTo: nil, bookmarkDataIsStale: &staled) {
+            _ = url.startAccessingSecurityScopedResource()
+            self.saveDir = url
+        }
+        
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in self.tick() }
@@ -124,10 +132,23 @@ class DLDelegate: NSObject, URLSessionDownloadDelegate {
             DispatchQueue.main.async {
                 item.state = .done; item.speed = 0
                 if item.fileSize > 0 { item.downloaded = item.fileSize }
+                self.notify(title: "Download Complete", body: item.fileName)
             }
         } catch {
-            DispatchQueue.main.async { item.state = .error; item.errorMsg = error.localizedDescription }
+            DispatchQueue.main.async {
+                item.state = .error; item.errorMsg = error.localizedDescription
+                self.notify(title: "Download Failed", body: error.localizedDescription)
+            }
         }
+    }
+
+    private func notify(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req)
     }
 
     func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask,
@@ -148,6 +169,7 @@ class DLDelegate: NSObject, URLSessionDownloadDelegate {
                 if !item.isPaused && !item.isCancelled { item.state = .cancelled }
             } else {
                 item.state = .error; item.errorMsg = e.localizedDescription; item.speed = 0
+                self.notify(title: "Download Failed", body: "\(item.fileName)\n\(e.localizedDescription)")
             }
         }
     }
