@@ -57,7 +57,7 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
             
             let item = DLItem(id: meta.id, url: meta.url, fileName: meta.fileName, savePath: meta.savePath)
             item.task = dlTask
-            if id >= nextId { nextId = id + 1 }
+            if item.id >= nextId { nextId = item.id + 1 }
             
             switch task.state {
             case .running: item.state = .downloading
