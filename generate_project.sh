@@ -89,7 +89,6 @@ cat > BDFlix.xcodeproj/project.pbxproj << 'PBXPROJ'
 			isa = PBXGroup;
 			children = (
 				A20000001 /* BDFlixApp.swift */,
-				A20000002 /* ContentView.swift */,
 				A20000024 /* Info.plist */,
 				A50000003 /* Models */,
 				A50000004 /* Services */,
@@ -123,6 +122,7 @@ cat > BDFlix.xcodeproj/project.pbxproj << 'PBXPROJ'
 		A50000005 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				A20000002 /* ContentView.swift */,
 				A20000010 /* SearchView.swift */,
 				A20000011 /* DownloadsView.swift */,
 				A20000012 /* AboutView.swift */,
