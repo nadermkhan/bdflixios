@@ -15,7 +15,8 @@ class DownloadManager: NSObject, ObservableObject {
     override init() {
         super.init()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+            guard let self = self else { return }
+            Task { @MainActor in self.tick() }
         }
     }
 
