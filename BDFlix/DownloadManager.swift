@@ -190,9 +190,11 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
             moveError = error
         }
 
+        let finalError = moveError
+
         Task { @MainActor in
             guard let item = self.itemForTask(downloadTask) else { return }
-            if let error = moveError {
+            if let error = finalError {
                 self.objectWillChange.send()
                 item.state = .error; item.errorMsg = error.localizedDescription
                 self.notify(title: "Download Failed", body: error.localizedDescription)
