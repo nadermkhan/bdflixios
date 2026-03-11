@@ -32,19 +32,18 @@ class SearchEngine: ObservableObject {
                 }
                 for await batch in group {
                     all.append(contentsOf: batch)
+                    all.sort {
+                        let c = $0.folder.localizedCaseInsensitiveCompare($1.folder)
+                        return c == .orderedSame
+                            ? $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                            : c == .orderedAscending
+                    }
+                    self.results = all
                     done += 1
-                    progress = "\(done)/\(ServerInfo.all.count)"
+                    self.progress = "\(done)/\(ServerInfo.all.count)"
                 }
             }
 
-            all.sort {
-                let c = $0.folder.localizedCaseInsensitiveCompare($1.folder)
-                return c == .orderedSame
-                    ? $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                    : c == .orderedAscending
-            }
-
-            results = all
             isSearching = false
             progress = "\(all.count) files"
         }
