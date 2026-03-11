@@ -174,20 +174,33 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
     nonisolated func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo loc: URL) {
+        guard let desc = downloadTask.taskDescription,
+              let data = desc.data(using: .utf8),
+              let meta = try? JSONDecoder().decode(DLTaskMeta.self, from: data) else { return }
+        
+        let fm = FileManager.default
+        let savePath = meta.savePath
+        var moveError: Error?
+        
+        do {
+            try? fm.createDirectory(at: savePath.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: savePath.path) { try fm.removeItem(at: savePath) }
+            try fm.moveItem(at: loc, to: savePath)
+        } catch {
+            moveError = error
+        }
+
         Task { @MainActor in
             guard let item = self.itemForTask(downloadTask) else { return }
-            do {
-                let fm = FileManager.default
-                if fm.fileExists(atPath: item.savePath.path) { try fm.removeItem(at: item.savePath) }
-                try fm.moveItem(at: loc, to: item.savePath)
+            if let error = moveError {
+                self.objectWillChange.send()
+                item.state = .error; item.errorMsg = error.localizedDescription
+                self.notify(title: "Download Failed", body: error.localizedDescription)
+            } else {
                 self.objectWillChange.send()
                 item.state = .done; item.speed = 0
                 if item.fileSize > 0 { item.downloaded = item.fileSize }
                 self.notify(title: "Download Complete", body: item.fileName)
-            } catch {
-                self.objectWillChange.send()
-                item.state = .error; item.errorMsg = error.localizedDescription
-                self.notify(title: "Download Failed", body: error.localizedDescription)
             }
         }
     }
