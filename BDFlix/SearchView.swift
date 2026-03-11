@@ -8,6 +8,32 @@ struct SearchView: View {
     @State private var toast = ""
     @State private var showToast = false
 
+    @State private var filterMediaOnly = false
+    @State private var sortColumn: SortColumn = .folder
+    @State private var sortAscending = true
+
+    enum SortColumn: String, CaseIterable {
+        case folder = "Folder"
+        case name = "Name"
+        case size = "Size"
+    }
+
+    var processedResults: [FileResult] {
+        var base = engine.results
+        if filterMediaOnly {
+            base = base.filter { $0.isMedia }
+        }
+        return base.sorted { a, b in
+            let res: Bool
+            switch sortColumn {
+            case .name: res = a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            case .size: res = a.sizeBytes < b.sizeBytes
+            case .folder: res = a.folder.localizedCaseInsensitiveCompare(b.folder) == .orderedAscending
+            }
+            return sortAscending ? res : !res
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -31,7 +57,7 @@ struct SearchView: View {
                     }
                 } else {
                     List {
-                        ForEach(engine.results) { file in
+                        ForEach(processedResults) { file in
                             FileRow(file: file)
                                 .swipeActions(edge: .trailing) {
                                     Button {
@@ -45,6 +71,10 @@ struct SearchView: View {
                                 .contextMenu {
                                     Button { dlMgr.add(url: file.fullUrl, name: file.name); flash("Download started") }
                                         label: { Label("Download", systemImage: "arrow.down.circle") }
+                                    if file.isMedia {
+                                        Button { watchM3U8(file) }
+                                            label: { Label("Watch (M3U8)", systemImage: "play.circle") }
+                                    }
                                     Button { UIPasteboard.general.string = file.fullUrl; flash("URL copied") }
                                         label: { Label("Copy URL", systemImage: "doc.on.doc") }
                                     Button { UIPasteboard.general.string = file.name; flash("Name copied") }
@@ -61,12 +91,27 @@ struct SearchView: View {
             .onSubmit(of: .search) { engine.search(query) }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if engine.isSearching {
-                        ProgressView()
-                    } else if !engine.results.isEmpty {
-                        Text(engine.progress)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    HStack {
+                        if engine.isSearching {
+                            ProgressView()
+                        } else if !engine.results.isEmpty {
+                            Text(engine.progress)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Menu {
+                            Toggle("Media Files Only", isOn: $filterMediaOnly)
+                            Divider()
+                            Picker("Sort By", selection: $sortColumn) {
+                                ForEach(SortColumn.allCases, id: \.self) { c in
+                                    Text(c.rawValue).tag(c)
+                                }
+                            }
+                            Toggle("Ascending", isOn: $sortAscending)
+                        } label: {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                        }
                     }
                 }
             }
@@ -91,6 +136,26 @@ struct SearchView: View {
             withAnimation { showToast = false }
         }
     }
+
+    private func watchM3U8(_ file: FileResult) {
+        let content = "#EXTM3U\n#EXTINF:-1,\(file.name)\n\(file.fullUrl)"
+        let tempDir = FileManager.default.temporaryDirectory
+        let m3u8URL = tempDir.appendingPathComponent("\(file.name).m3u8")
+        do {
+            try content.write(to: m3u8URL, atomically: true, encoding: .utf8)
+            let av = UIActivityViewController(activityItems: [m3u8URL], applicationActivities: nil)
+            if let ws = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let vc = ws.windows.first?.rootViewController {
+                if let pop = av.popoverPresentationController {
+                    pop.sourceView = vc.view
+                    pop.sourceRect = CGRect(x: vc.view.bounds.midX, y: vc.view.bounds.midY, width: 0, height: 0)
+                }
+                vc.present(av, animated: true)
+            }
+        } catch {
+            print("Failed to make m3u8")
+        }
+    }
 }
 
 // MARK: - File Row
@@ -111,8 +176,6 @@ struct FileRow: View {
             }
             HStack(spacing: 12) {
                 Label(Fmt.size(file.sizeBytes), systemImage: "doc")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Label(file.server, systemImage: "server.rack")
                     .font(.caption2).foregroundStyle(.secondary)
                 Text(file.folder)
                     .font(.caption2).foregroundStyle(.tertiary)
