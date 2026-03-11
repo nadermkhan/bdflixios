@@ -1,6 +1,8 @@
 #!/bin/bash
 # generate_project.sh
 
+mkdir -p BDFlix.xcodeproj
+
 cat > BDFlix.xcodeproj/project.pbxproj << 'PBXPROJ'
 // !$*UTF8*$!
 {
