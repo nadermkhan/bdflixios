@@ -30,6 +30,8 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         
         self.session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
         
+        loadItems()
+        
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in self.tick() }
@@ -46,6 +48,50 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         let savePath: URL
     }
     
+    private struct DLSavedItem: Codable {
+        let id: Int
+        let url: String
+        let fileName: String
+        let savePath: URL
+        let fileSize: Int64
+        let downloaded: Int64
+        let stateRaw: String
+        let errorMsg: String
+    }
+    
+    private var saveItemsURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("downloads.json")
+    }
+
+    private func saveItems() {
+        let saved = items.map { DLSavedItem(id: $0.id, url: $0.url, fileName: $0.fileName, savePath: $0.savePath, fileSize: $0.fileSize, downloaded: $0.downloaded, stateRaw: $0.state.rawValue, errorMsg: $0.errorMsg) }
+        if let data = try? JSONEncoder().encode(saved) {
+            try? data.write(to: saveItemsURL)
+        }
+    }
+
+    private func loadItems() {
+        guard let data = try? Data(contentsOf: saveItemsURL),
+              let saved = try? JSONDecoder().decode([DLSavedItem].self, from: data) else { return }
+        var maxId = 0
+        for s in saved {
+            let item = DLItem(id: s.id, url: s.url, fileName: s.fileName, savePath: s.savePath)
+            item.fileSize = s.fileSize
+            item.downloaded = s.downloaded
+            item.state = DLState(rawValue: s.stateRaw) ?? .queued
+            item.errorMsg = s.errorMsg
+            
+            if item.state == .downloading || item.state == .queued {
+                item.state = .paused
+                item.isPaused = true
+            }
+            
+            self.items.append(item)
+            if item.id > maxId { maxId = item.id }
+        }
+        if maxId >= nextId { nextId = maxId + 1 }
+    }
+    
     private func restoreExistingTasks() async {
         let tasks = await session.allTasks
         for task in tasks {
@@ -54,14 +100,21 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
                   let data = desc.data(using: .utf8),
                   let meta = try? JSONDecoder().decode(DLTaskMeta.self, from: data) else { continue }
             
-            let item = DLItem(id: meta.id, url: meta.url, fileName: meta.fileName, savePath: meta.savePath)
+            let item: DLItem
+            if let existing = items.first(where: { $0.id == meta.id }) {
+                item = existing
+            } else {
+                item = DLItem(id: meta.id, url: meta.url, fileName: meta.fileName, savePath: meta.savePath)
+                items.insert(item, at: 0)
+            }
+            
             item.task = dlTask
             if item.id >= nextId { nextId = item.id + 1 }
             
             switch task.state {
-            case .running: item.state = .downloading
-            case .suspended: item.state = .paused
-            case .canceling: item.state = .cancelled
+            case .running: item.state = .downloading; item.isPaused = false
+            case .suspended: item.state = .paused; item.isPaused = true
+            case .canceling: item.state = .cancelled; item.isCancelled = true
             case .completed:
                 if let err = task.error {
                     item.state = .error
@@ -72,9 +125,8 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 }
             @unknown default: item.state = .queued
             }
-            
-            items.append(item)
         }
+        saveItems()
     }
 
     static func defaultDir() -> URL {
@@ -89,8 +141,9 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         let save = saveDir.appendingPathComponent(StrUtil.sanitize(name))
         let item = DLItem(id: nextId, url: url, fileName: name, savePath: save)
         nextId += 1
-        items.append(item)
+        items.insert(item, at: 0)
         start(item)
+        saveItems()
     }
 
     func pause(_ item: DLItem) {
@@ -98,6 +151,7 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         item.isPaused = true
         item.task?.cancel(byProducingResumeData: { item.resumeData = $0 })
         item.state = .paused; item.speed = 0
+        saveItems()
     }
 
     func resume(_ item: DLItem) {
@@ -109,17 +163,20 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
             setTaskMeta(for: t, from: item)
             t.resume()
         } else { start(item) }
+        saveItems()
     }
 
     func cancel(_ item: DLItem) {
         objectWillChange.send()
         item.isCancelled = true; item.task?.cancel()
         item.state = .cancelled; item.speed = 0
+        saveItems()
     }
 
     func remove(_ item: DLItem) {
         cancel(item)
         items.removeAll { $0.id == item.id }
+        saveItems()
     }
 
     func changeSaveDir(to url: URL) {
@@ -204,6 +261,7 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 if item.fileSize > 0 { item.downloaded = item.fileSize }
                 self.notify(title: "Download Complete", body: item.fileName)
             }
+            self.saveItems()
         }
     }
 
@@ -237,6 +295,7 @@ class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 item.state = .error; item.errorMsg = e.localizedDescription; item.speed = 0
                 self.notify(title: "Download Failed", body: "\(item.fileName)\n\(e.localizedDescription)")
             }
+            self.saveItems()
         }
     }
 
