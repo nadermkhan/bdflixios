@@ -2,8 +2,10 @@
 import SwiftUI
 
 struct SearchView: View {
+    @Environment(\.editMode) private var editMode
     @EnvironmentObject var engine: SearchEngine
     @EnvironmentObject var dlMgr: DownloadManager
+    
     @State private var query = ""
     @State private var toast = ""
     @State private var showToast = false
@@ -11,6 +13,9 @@ struct SearchView: View {
     @State private var filterMediaOnly = false
     @State private var sortColumn: SortColumn = .folder
     @State private var sortAscending = true
+
+    // 1. Add state to hold selected file IDs
+    @State private var selectedFiles = Set<UUID>()
 
     enum SortColumn: String, CaseIterable {
         case folder = "Folder"
@@ -56,7 +61,8 @@ struct SearchView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
-                    List {
+                    // 2. Bind the list to the selectedFiles set
+                    List(selection: $selectedFiles) {
                         ForEach(processedResults) { file in
                             FileRow(file: file)
                                 .swipeActions(edge: .trailing) {
@@ -88,8 +94,18 @@ struct SearchView: View {
             .navigationTitle("BDFlix")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Search files...")
-            .onSubmit(of: .search) { engine.search(query) }
+            .onSubmit(of: .search) { 
+                selectedFiles.removeAll() // Clear selection on new search
+                engine.search(query) 
+            }
             .toolbar {
+                // 3. Add an EditButton for multiselect
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if !engine.results.isEmpty {
+                        EditButton()
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack {
                         if engine.isSearching {
@@ -115,6 +131,25 @@ struct SearchView: View {
                     }
                 }
             }
+            // 4. Show a download button at the bottom when items are selected
+            .safeAreaInset(edge: .bottom) {
+                if !selectedFiles.isEmpty {
+                    Button {
+                        downloadSelected()
+                    } label: {
+                        Label("Download \(selectedFiles.count) Files", systemImage: "arrow.down.circle.fill")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.blue, in: Capsule())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal)
+                            .padding(.bottom, 8)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut, value: selectedFiles.isEmpty)
+                }
+            }
             .overlay(alignment: .bottom) {
                 if showToast {
                     Text(toast)
@@ -127,6 +162,23 @@ struct SearchView: View {
                 }
             }
         }
+    }
+
+    // 5. Logic for processing the bulk download
+    private func downloadSelected() {
+        let filesToDownload = processedResults.filter { selectedFiles.contains($0.id) }
+        
+        for file in filesToDownload {
+            dlMgr.add(url: file.fullUrl, name: file.name)
+        }
+        
+        let count = selectedFiles.count
+        
+        // Clean up UI state
+        selectedFiles.removeAll()
+        editMode?.wrappedValue = .inactive 
+        
+        flash("Started \(count) downloads")
     }
 
     private func flash(_ msg: String) {
